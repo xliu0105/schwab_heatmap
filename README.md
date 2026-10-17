@@ -1,39 +1,79 @@
-# Heatmap
+# Schwab Heatmap
 
-个人自用的股票热图桌面 App。行情数据来自 Schwab Trader API，界面和交互照着 TradingView Stock Heatmap 做。
+A desktop stock-market heatmap for macOS, powered by your own [Charles Schwab Trader API](https://developer.schwab.com) account. The layout and interactions follow the familiar TradingView-style heatmap: tiles grouped by sector and industry, sized by market cap, colored by performance, updating live.
 
-## 首次运行
+[中文说明](README.zh-CN.md)
+
+![Schwab Heatmap in demo mode (synthetic prices)](docs/screenshot.png)
+
+<sub>Screenshot taken in demo mode: the prices are synthetic.</sub>
+
+> **Not affiliated** with Charles Schwab, TradingView, Nasdaq or Zacks. You need your own Schwab developer app, and market data is for your personal use under Schwab's terms. Nothing here is investment advice.
+
+## Features
+
+- **Stock lists**: Nasdaq-100, Nasdaq Composite (~3,400), Dow Jones Composite / Industrials / Transportation / Utilities, KBW Nasdaq Bank, S&P 500, all US-listed companies (~5,800), your watchlist, and your Schwab holdings.
+- **ETF holdings maps**: SMH, QQQM, XLP and VOO by default. Add, remove and reorder ETFs; tiles are sized by fund weight.
+- **Live quotes** over the Schwab Streamer (WebSocket), with batched REST snapshots and polling for anything past the streaming cap.
+- **Periods**: 1 day, pre/after-market, 1 week, 1/3/6 months, year to date, 1 year. Long periods are computed from daily history and stay live with each tick.
+- **Sizing**: market cap, equal weight, volume, dollar volume, fund weight (ETFs) or position value (holdings).
+- **Page summary**: the official index or the ETF's own move and price, or a weighted estimate from constituents where no index quote exists. Holdings show total value, return and day P/L.
+- **Navigation**: click to drill into a sector or industry, scroll-wheel zoom around the cursor, drag to pan, +/−/reset buttons, search highlighting, legend filtering, PNG export.
+- **Watchlist**: right-click any stock to add or remove it (watchlist tiles get a ★), or search ~7,000 US stocks by ticker or company name.
+- **Holdings** refresh within seconds of an order fill (Schwab account-activity stream), with Schwab's own day P/L.
+- **One GICS taxonomy** across all lists, in **English and Chinese** (switch with the EN / 中 button).
+- **Optional Google sign-in** syncs your watchlist, ETF list and view preferences across Macs (bring your own Firebase project).
+
+## Requirements
+
+- macOS on Apple Silicon (the packaging script builds arm64; development works anywhere Electron runs)
+- Node.js 20 or newer
+- A Schwab brokerage account and a [Schwab developer](https://developer.schwab.com) app approved for **Market Data Production** (and Accounts and Trading if you want the holdings map)
+
+## Quick start
 
 ```bash
+git clone <this repo>
+cd schwab-heatmap
 npm install
 npm run dev
 ```
 
-1. 点右上角 ⚙ 打开设置，填入 developer.schwab.com 上 App 的 **App Key**、**Secret**、**Callback URL**（要和注册时一字不差，比如 `https://127.0.0.1`）。
-2. 点「登录 Schwab」，在弹出的窗口里完成登录和授权。App 会自动截获回调里的 code，不需要在本地起 https 服务。
-3. Schwab 的 refresh token 有效期是 7 天，到期后要重新登录（设置页里会显示剩余天数）。
+The first `npm run dev` also compiles the stock-list data (see [Data sources](#data-sources)); this takes a few seconds and needs internet access.
 
-不登录也想看界面的话：`HEATMAP_DEMO=1 npm run dev`（使用合成数据）。如果同时还开着另一个实例，再加上 `HEATMAP_USER_DATA=/某个临时目录`，两边就不会共用存储。
+Then, in the app:
 
-## 安装到「应用程序」
+1. Open **Settings** (⚙, top right) and enter your Schwab app's **App Key**, **Secret** and **Callback URL**. The callback must match your app registration exactly, for example `https://127.0.0.1`.
+2. Click **Log in to Schwab** and finish the login in the window that opens. The app captures the OAuth redirect itself, so there's no local HTTPS server to set up.
+3. Schwab refresh tokens last 7 days; Settings shows when you need to log in again.
+
+Your Schwab secret and tokens are stored only on your Mac, encrypted with the macOS keychain (`safeStorage`).
+
+### Demo mode
+
+To try the UI without a Schwab account:
+
+```bash
+HEATMAP_DEMO=1 npm run dev
+```
+
+Prices are synthetic. Add `HEATMAP_USER_DATA=/some/tmp/dir` to run it beside a real instance without sharing storage.
+
+### Install into /Applications
 
 ```bash
 npm run install-app
 ```
 
-这条命令会打包、做 ad-hoc 签名，然后把 App 复制到 `/Applications/Schwab Heatmap.app`；以后更新代码也是重新跑这一条。安装版和 `npm run dev` 用的是同一个数据目录（`~/Library/Application Support/schwab-heatmap`）和同一个钥匙串密钥，所以不用重新登录。两者不要同时运行。安装版第一次读取 Secret 时，macOS 可能会弹窗询问是否允许访问钥匙串，选「始终允许」即可。
+This builds the app, signs it ad hoc and copies it to `/Applications/Schwab Heatmap.app`. Run it again after pulling updates. The installed app and `npm run dev` share the same data directory (`~/Library/Application Support/schwab-heatmap`), so you stay logged in; don't run both at once. The first time the installed app reads your secret, macOS may ask for keychain access: choose **Always Allow**.
 
-图标由 `npm run icon` 生成，输出到 `build/icon.icns`。
+## Optional: Google sign-in and cloud sync
 
-## Google 账号与云同步（可选）
+Signing in with Google syncs your watchlist, ETF list and view preferences (language, default list, period, sizing, grouping) across machines. Schwab credentials and login state are never synced. This needs a Firebase project of your own; the free tier is plenty.
 
-登录 Google 账号后，自选股和界面偏好（语言、默认股票池、颜色周期、方块大小、是否分组）会在登录同一账号的电脑之间同步。Schwab 的 Key、Secret 和登录状态不同步，每台电脑各自登录 Schwab。
-
-需要先在 Firebase 做一次设置（免费额度足够个人使用）：
-
-1. 打开 [Firebase 控制台](https://console.firebase.google.com)，新建项目（Google Analytics 可以关掉）。
-2. **Authentication → Sign-in method**：启用 **Google**。
-3. **Firestore Database → 创建数据库**：选生产模式，区域可选 `asia-east1`（台湾）或 `asia-northeast1`（东京）。建好后在「规则」页粘贴下面这段并发布：
+1. Create a project in the [Firebase console](https://console.firebase.google.com).
+2. **Authentication → Sign-in method**: enable **Google**.
+3. **Firestore Database → Create database** (production mode), then publish these rules:
 
    ```
    rules_version = '2';
@@ -46,56 +86,50 @@ npm run install-app
    }
    ```
 
-4. **项目设置 → 常规 → 你的应用**：添加一个 **Web 应用**，记下配置里的 `apiKey` 和 `projectId`。
-5. 打开 [Google Cloud Console](https://console.cloud.google.com/apis/credentials)，在顶部选择同一个项目：
-   - **OAuth 同意屏幕**：用户类型选「外部」，保持「测试」状态，并把自己的 Gmail 加为测试用户；
-   - **凭据 → 创建凭据 → OAuth 客户端 ID**：应用类型选「**桌面应用**」，记下客户端 ID 和客户端密钥。
-6. 把 `cloud.config.example.json` 复制为 `cloud.config.json`，填入以上四个值，然后运行 `npm run install-app`。这个文件会被打包进 App，并已加入 `.gitignore`。
+4. **Project settings → Your apps**: add a **Web app** and note its `apiKey` and `projectId`.
+5. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials) for the same project:
+   - **OAuth consent screen**: External, keep it in **Testing**, and add your Gmail address as a test user.
+   - **Credentials → Create credentials → OAuth client ID**: type **Desktop app**; note the client ID and secret.
+6. Copy `cloud.config.example.json` to `cloud.config.json` and fill in the four values. This file is git-ignored and is bundled into the app when you package it.
 
-之后在 App 里点右上角的人像按钮（或 ⚙ 设置）→「使用 Google 登录」。系统浏览器会打开 Google 登录页，完成后回到 App 即可。Google 不允许在 App 内嵌的窗口里登录，所以要走浏览器。登录状态长期有效，不需要每周重新登录。
+Sign-in opens your system browser (Google doesn't allow embedded webviews) and uses a one-off loopback redirect with PKCE. Without `cloud.config.json` the account features are simply hidden.
 
-访问 Google 服务需要能连上 Google。App 的云同步请求走系统代理，和 Chrome 一致。
+> The packaged app includes `cloud.config.json`. These values aren't true secrets, and the Firestore rules keep each user's data private, but don't hand your build to others unless you're fine with them using your Firebase project.
 
-没有 `cloud.config.json` 时，账号功能自动隐藏，其他功能照常使用。
+## Data sources
 
-## 功能
+Schwab's API has no index constituents or sector data, so the stock lists are compiled from public pages by `npm run universes` (run automatically before `dev` and `dist` when files are missing). The output in `resources/universes/` is **not checked in**.
 
-- 股票池（顺序和 TradingView「美国」列表一致）：Nasdaq-100、纳斯达克综合（约 3400 只）、道琼斯综合 / 工业 / 运输 / 公用事业、KBW Nasdaq 银行、标普 500、所有美国公司（约 5800 只），以及自选和持仓（来自 Schwab 账户）。Russell 系列暂不提供：官方成分股是付费数据
-- ETF 成分股热图：下拉菜单里的「ETF」分组（默认 SMH、QQQM、XLP、VOO），在「⚙ 管理 ETF…」里增删和排序；方块大小默认按 ETF 持仓权重。成分股和权重来自 Zacks 的持仓页面，每只 ETF 每个交易日最多抓取一次并缓存在本地；拿不到时沿用上次的缓存。ETF 列表和自选一样会云同步
-- 中英文界面：右上角的「EN / 中」按钮切换，板块、行业名称会跟着切换（例如「金融」/「FINANCIALS」）
-- 方块面积：市值、等权、成交量、成交额；ETF 页面默认按 ETF 权重，持仓页面默认按持仓市值。颜色：1 天、盘前/盘后、1 周、1 个月、3 个月、6 个月、年初至今、1 年
-- 页面顶部显示整页在所选周期内的涨跌：指数页用官方指数点位，ETF 页用 ETF 本身的价格；Schwab 没有行情的指数改用成分股估算。自选页同时给出等权和市值加权两种结果，持仓页显示总市值、收益率和盈亏金额。下钻后还会显示当前板块或行业的涨跌
-- 板块 → 行业分组；点击下钻，Esc 或面包屑返回上一级
-- 缩放：滚轮以光标为中心缩放，放大后左键拖动平移；右侧有 + / − / ⟲ 按钮，快捷键为 `+` `-` `0`
-- 自选：在任意热图里右键股票即可加入或移出，自选里的股票方块带 ★；在「自选」页可以搜索添加（支持一次粘贴多个代码）
-- 持仓：盘中成交后几秒内自动刷新（订阅 Schwab 账户动态推送，另有每 60 秒和切回窗口时的兜底刷新）。「1 天」的盈亏使用 Schwab 的当日盈亏
-- 悬停浮层：所在行业的股票列表和走势小图；悬停图例的某一档，只高亮落在这一档的股票
-- 按代码或名称搜索高亮，导出 PNG，全屏
-- 行情通过 Schwab Streamer（LEVELONE_EQUITIES）实时推送；多周期涨跌幅用日线历史计算，标普 500 首次同步约 5 分钟（受 120 次/分 的限流约束）。之后按交易日缓存在本地，同步时按市值从大到小进行
+| Data | Source |
+|---|---|
+| S&P 500 members, GICS sectors and sub-industries | Wikipedia |
+| Nasdaq-100, Nasdaq Composite, KBW Nasdaq Bank members | Nasdaq index weightings (indexes.nasdaqomx.com) |
+| Dow Jones Industrials / Transportation / Utilities | Wikipedia |
+| All US stocks, classification of non-S&P stocks, fallback share counts | Nasdaq stock screener |
+| ETF holdings and weights | Zacks fund holdings pages (cached locally, at most once per trading day) |
+| Quotes, daily history, intraday charts, share counts, positions | Schwab Trader API |
 
-## 数据从哪来
+The Nasdaq screener's 153 industries are mapped onto GICS in `src/shared/taxonomy.ts`, so every list shares one set of sectors and industries. The ETF holdings come from scraping a web page and may break if Zacks changes its site; the app then keeps the last cached copy.
 
-Schwab 不提供指数成分股和行业分类，所以：
+## How it works
 
-- S&P 500 成分股和 GICS 板块/子行业：Wikipedia
-- Nasdaq-100、纳斯达克综合、KBW 银行指数：Nasdaq 指数官网（indexes.nasdaqomx.com）
-- 道琼斯工业：Wikipedia 上的公司名单，再和 S&P 500 对照出代码；运输、公用事业：Wikipedia 表格；综合指数 = 三者合并
-- 所有美国公司、非 S&P 股票的分类、各股股本（作为备用）：Nasdaq 选股器。它的 153 种行业由 `src/shared/taxonomy.ts` 映射到 GICS，所以所有股票池共用同一套板块和行业
+- **Electron + React + TypeScript.** The main process (`src/main`) owns OAuth, the Schwab REST client, the Streamer connection and all caching. The renderer (`src/renderer`) lays out the treemap with `d3-hierarchy` and draws it on a canvas.
+- **Rate limits.** Schwab allows 120 market-data requests per minute. The app uses 110, split into three priority lanes: *interactive* (hover charts, a list's first load, positions), *refresh* (re-polls, share counts; leaves 30 slots per minute free) and *bulk* (daily-history sync, paced evenly; leaves 60 free). Requests time out after 15 seconds.
+- **Streaming cap.** The Streamer accepts about 3,000 symbols. Subscriptions are ordered benchmark first, then by market cap, so only the smallest companies fall back to a 2-minute batch poll.
+- **Daily history.** The first sync fetches one year of daily bars per symbol (about 10 minutes for the S&P 500, a couple of hours for all US stocks). After that, the batch quotes the app loads anyway carry each day's new close, so daily updates need no extra requests. Gaps, likely splits and a weekly full refresh still refetch.
+- **Switching lists** waits for fresh quotes by default, so a map is never drawn from minutes-old prices. **Settings → Display** can switch instantly from cached prices instead, marked "Updating quotes…" until they're refreshed.
+- **Diagnostics.** Phase timings and slow requests are appended to `perf.log` in the data directory (durations and counts only).
 
-股票很多的股票池（纳斯达克综合、所有美国公司），1 周以上周期第一次同步日线要比较久（所有美国公司约 65 分钟），会按市值从大到小同步。如果 Schwab Streamer 拒绝订阅某一批股票，这批股票会改为每 30 秒用批量报价刷新，鼠标悬停在右上角「实时」上可以看到数量。
-
-打包进 App 的快照在 `resources/universes/`。可以用 `npm run universes` 重新生成，也可以在 App 里点 ⟳ 刷新（刷新后的数据存在用户数据目录，优先级高于打包快照）。
-
-市值 = Schwab instruments 接口返回的 `sharesOutstanding` × 实时价格。
-
-## 开发
+## Development
 
 ```bash
-npm test          # vitest 单测
+npm test            # unit tests (vitest)
 npm run typecheck
-npm run dist      # 打包 macOS dmg（未签名）
+npm run universes   # rebuild the stock-list data
+npm run icon        # regenerate build/icon.icns
+npm run dist        # package dist/mac-arm64/Schwab Heatmap.app (unsigned)
 ```
 
-主进程（`src/main`）负责 OAuth、REST 限流、Streamer 和本地缓存；渲染进程（`src/renderer`）用 d3-hierarchy 计算 treemap 布局，再画到 Canvas 上。
+## License
 
-Schwab 行情数据仅供个人使用，请勿对外分发。
+[MIT](LICENSE)

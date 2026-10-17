@@ -3,3 +3,6 @@ out
 dist
 .DS_Store
 cloud.config.json
+# Compiled from Wikipedia/Nasdaq at build time (npm run universes)
+resources/universes/*.json
+perf.log

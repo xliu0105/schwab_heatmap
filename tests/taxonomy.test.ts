@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { classifyNasdaq, hasIndustryZh, industryName, knownSectors, NASDAQ_INDUSTRY, OTHER, sectorName } from '@shared/taxonomy'
-import sp500 from '../resources/universes/sp500.json'
+import { existsSync, readFileSync } from 'fs'
+import { resolve } from 'path'
+
+// Generated at build time (not in git); skip the check that needs it on a fresh clone.
+const sp500File = resolve(__dirname, '../resources/universes/sp500.json')
+const sp500 = existsSync(sp500File) ? (JSON.parse(readFileSync(sp500File, 'utf8')) as { sector: string; industry: string }[]) : []
 
 describe('taxonomy', () => {
   it('maps every Nasdaq industry onto a known GICS sector with a Chinese name', () => {
@@ -9,8 +14,8 @@ describe('taxonomy', () => {
       expect(hasIndustryZh(industry), `${k} → ${industry}`).toBe(true)
     }
   })
-  it('has Chinese names for every sector and sub-industry in the S&P 500 snapshot', () => {
-    for (const c of sp500 as { sector: string; industry: string }[]) {
+  it.skipIf(!sp500.length)('has Chinese names for every sector and sub-industry in the S&P 500 snapshot', () => {
+    for (const c of sp500) {
       expect(sectorName(c.sector, 'zh'), c.sector).not.toBe(c.sector)
       expect(hasIndustryZh(c.industry), c.industry).toBe(true)
     }

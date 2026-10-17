@@ -4,7 +4,9 @@
   "description": "Personal stock heatmap desktop app powered by the Schwab Trader API",
   "main": "out/main/index.js",
   "private": true,
+  "license": "MIT",
   "scripts": {
+    "predev": "tsx --tsconfig tsconfig.node.json scripts/ensure-universes.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
@@ -12,6 +14,7 @@
     "test": "vitest run",
     "universes": "tsx --tsconfig tsconfig.node.json scripts/build-universes.ts",
     "icon": "node scripts/make-icon.mjs",
+    "predist": "tsx --tsconfig tsconfig.node.json scripts/ensure-universes.ts",
     "dist": "electron-vite build && electron-builder --mac",
     "install-app": "npm run dist && node scripts/install-app.mjs"
   },
