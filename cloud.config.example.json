@@ -1,0 +1,10 @@
+{
+  "firebase": {
+    "apiKey": "Firebase 项目设置 → 你的应用 → Web 应用里的 apiKey",
+    "projectId": "your-firebase-project-id"
+  },
+  "google": {
+    "clientId": "xxxxxxxx.apps.googleusercontent.com",
+    "clientSecret": "Google Cloud Console → 凭据 → 桌面应用 OAuth 客户端的客户端密钥"
+  }
+}
