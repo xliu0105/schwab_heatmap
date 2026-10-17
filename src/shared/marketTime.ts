@@ -29,3 +29,23 @@ export function lastMarketClose(now: number): number {
   }
   return now - 7 * DAY
 }
+
+/** New York calendar date (YYYY-MM-DD) of a timestamp. */
+export function sessionDate(t: number): string {
+  const p = etParts(t)
+  return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`
+}
+
+/** The weekday close before the given one. */
+export function previousClose(close: number): number {
+  return lastMarketClose(close - 1)
+}
+
+/** 9:30 New York time of the session after the one that closed at `close`. */
+export function nextOpenAfter(close: number): number {
+  for (let k = 1; k <= 5; k++) {
+    const c = lastMarketClose(close + k * DAY)
+    if (c > close) return c - 6.5 * 3_600_000
+  }
+  return close + DAY
+}

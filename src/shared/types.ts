@@ -78,6 +78,8 @@ export type SizeBy = 'marketCap' | 'equal' | 'volume' | 'dollarVolume' | 'weight
 export interface Quote {
   symbol: string
   last?: number
+  /** Regular-session last price (after the close: that session's close). */
+  regularLast?: number
   prevClose?: number
   change?: number
   changePct?: number

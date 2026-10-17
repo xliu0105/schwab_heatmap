@@ -26,6 +26,7 @@ export function parseQuote(symbol: string, raw: RawQuote): Quote {
   return {
     symbol,
     last: q.lastPrice ?? regular,
+    regularLast: regular,
     prevClose: q.closePrice,
     change: q.regularMarketNetChange ?? q.netChange,
     changePct: q.regularMarketPercentChange ?? q.netPercentChange,

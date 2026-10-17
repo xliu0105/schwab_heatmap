@@ -26,6 +26,7 @@ export function parseLevelOne(row: Content, prevRegularLast?: number): Quote | u
   const last = num(row[F.last])
   const regular = num(row[F.regularLast]) ?? prevRegularLast
   if (last !== undefined) q.last = last
+  if (num(row[F.regularLast]) !== undefined) q.regularLast = num(row[F.regularLast])
   if (num(row[F.close]) !== undefined) q.prevClose = num(row[F.close])
   if (num(row[F.volume]) !== undefined) q.volume = num(row[F.volume])
   const change = num(row[F.regularNetChange]) ?? num(row[F.netChange])

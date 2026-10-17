@@ -132,7 +132,9 @@ export class DataService extends EventEmitter {
     // tiles you see, so they should get colors first.
     const bySize = [...symbols].sort((a, b) => (this.quotes.get(b)?.marketCap ?? 0) - (this.quotes.get(a)?.marketCap ?? 0))
     const order = this.benchmark && this.quotes.has(this.benchmark) ? [this.benchmark, ...bySize.filter((s) => s !== this.benchmark)] : bySize
-    void this.history.fill(order, (s, candles) => this.onHistory(s, candles))
+    // The quotes just loaded usually carry yesterday's missing close, so most histories update
+    // without a request; only the rest join the fetch queue.
+    this.history.fill(order, (s, candles) => this.onHistory(s, candles), this.quotes)
     return this.snapshot()
   }
 
