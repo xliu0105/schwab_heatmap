@@ -6,6 +6,8 @@ import { useT } from '../i18n'
 interface Props {
   status: StatusInfo
   cloud: CloudState
+  instantSwitch: boolean
+  onInstantSwitch(v: boolean): void
   onClose(): void
 }
 
@@ -42,7 +44,7 @@ function AccountSection({ cloud }: { cloud: CloudState }) {
   )
 }
 
-export function Settings({ status, cloud, onClose }: Props) {
+export function Settings({ status, cloud, instantSwitch, onInstantSwitch, onClose }: Props) {
   const { t } = useT()
   const [cfg, setCfg] = useState<PublicConfig>()
   const [appKey, setAppKey] = useState('')
@@ -92,6 +94,18 @@ export function Settings({ status, cloud, onClose }: Props) {
       <div className="modal">
         <h2>{t('settingsTitle')}</h2>
         <AccountSection cloud={cloud} />
+        <h3>{t('displayTitle')}</h3>
+        <div className="hint">{t('switchLabel')}</div>
+        <div className="opt-row">
+          <button className={`opt${!instantSwitch ? ' on' : ''}`} onClick={() => onInstantSwitch(false)}>
+            {t('switchWait')}
+            <small>{t('switchWaitHint')}</small>
+          </button>
+          <button className={`opt${instantSwitch ? ' on' : ''}`} onClick={() => onInstantSwitch(true)}>
+            {t('switchInstant')}
+            <small>{t('switchInstantHint')}</small>
+          </button>
+        </div>
         <h3>Schwab API</h3>
         <p className="hint">{t('settingsHint')}</p>
         <label>

@@ -1,5 +1,6 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { readFile } from 'fs/promises'
 import { dirname, join } from 'path'
 
 const root = () => app.getPath('userData')
@@ -9,6 +10,15 @@ export function readJson<T>(name: string, fallback: T): T {
   if (!existsSync(file)) return fallback
   try {
     return JSON.parse(readFileSync(file, 'utf8')) as T
+  } catch {
+    return fallback
+  }
+}
+
+/** Like readJson, without blocking the main process (for reading thousands of cache files). */
+export async function readJsonAsync<T>(name: string, fallback: T): Promise<T> {
+  try {
+    return JSON.parse(await readFile(join(root(), name), 'utf8')) as T
   } catch {
     return fallback
   }

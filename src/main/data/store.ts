@@ -3,6 +3,10 @@ import type { Candle, Constituent, Period, Quote, RefTable, Snapshot, StatusInfo
 import { periodStart, referenceCloses } from '@shared/perf'
 import { benchmarkFor } from '@shared/aggregate'
 import { holdingsChanged } from '@shared/positions'
+import { priceCoverage, shouldShowEarly } from '@shared/coverage'
+import { settings } from '../settings'
+import { singleFlight, subscriptionOrder } from '@shared/streamOrder'
+import { perfLog, stopwatch } from '../perf'
 import { auth } from '../auth/oauth'
 import { getQuotes, getSharesOutstanding } from '../schwab/market'
 import { Streamer } from '../schwab/streamer'
@@ -13,7 +17,8 @@ import { loadUniverse, symbolTable } from './universe'
 
 const TICK_FLUSH_MS = 100
 const SHARES_TTL_MS = 7 * 24 * 3600 * 1000
-const POLL_MS = 30_000
+// Symbols past Schwab's ~3000-symbol streaming cap (the smallest caps) are re-quoted this often.
+const POLL_MS = 120_000
 // Index quotes may not stream, so the page's benchmark is also refreshed by a cheap poll.
 const BENCHMARK_POLL_MS = 15_000
 // Positions refresh: soon after an account event (fills often arrive in parts), and as a fallback.
@@ -50,6 +55,12 @@ export class DataService extends EventEmitter {
   private pollTimer = setInterval(() => void this.poll(), POLL_MS)
   private benchmark?: string
   private benchmarkTimer = setInterval(() => void this.pollBenchmark(), BENCHMARK_POLL_MS)
+  // Periodic jobs skip a round while the previous one is still waiting in the rate limiter, so
+  // they can't pile up and starve everything below them.
+  private poll = singleFlight(() => this.pollOnce())
+  private pollBenchmark = singleFlight(() => this.pollBenchmarkOnce())
+  /** Universes whose on-screen prices are being refreshed right now (one refresh each at a time). */
+  private refreshing = new Set<UniverseId>()
   private holdingsTimer = setInterval(() => void this.refreshHoldings(), HOLDINGS_POLL_MS)
   private holdingsDebounce?: ReturnType<typeof setTimeout>
   private refreshingHoldings = false
@@ -62,6 +73,7 @@ export class DataService extends EventEmitter {
     this.streamer.on('refused', (symbols) => {
       this.polled = new Set(symbols)
       this.setStatus({ polled: symbols.length })
+      if (symbols.length) perfLog('streamRefused', { universe: this.universe, count: symbols.length })
       if (symbols.length) void this.poll()
     })
     this.streamer.on('account', () => {
@@ -96,6 +108,7 @@ export class DataService extends EventEmitter {
 
   async setUniverse(id: UniverseId): Promise<Snapshot> {
     const seq = ++this.loadSeq
+    const timer = stopwatch()
     this.universe = id
     this.benchmark = benchmarkFor(id)
     if (demoEnabled()) return this.loadDemo(id)
@@ -106,36 +119,77 @@ export class DataService extends EventEmitter {
       this.constituents = []
       this.setStatus({ message: { key: 'loadFailed', detail: (e as Error).message } })
     }
+    timer.lap('constituents')
     if (!loggedIn || seq !== this.loadSeq) return this.snapshot()
 
     const symbols = this.constituents.map((c) => c.symbol)
     const withBenchmark = this.benchmark && !symbols.includes(this.benchmark) ? [...symbols, this.benchmark] : symbols
-    try {
-      const big = this.staleShares(symbols).length > BLOCKING_SHARES_MAX
-      const shares = this.ensureShares(symbols, big)
-      const [quotes] = await Promise.all([getQuotes(withBenchmark), big ? undefined : shares])
-      if (big)
-        void shares.then(() => {
+    const big = this.staleShares(symbols).length > BLOCKING_SHARES_MAX
+    const shares = this.ensureShares(symbols, big)
+    // Market caps from bundled/cached share counts are good enough to lay out with; once fresher
+    // counts arrive, only the numbers update (as ticks), so the map doesn't re-layout.
+    if (big) void shares.then(() => seq === this.loadSeq && this.refreshCaps(symbols))
+
+    // Only if you opted in: a universe stops streaming when you leave it, so remembered prices can
+    // be minutes old. They're drawn marked as updating ('stale'), refreshed as ticks, and
+    // 'refreshed' clears the mark. (A refresh still running from an earlier visit is left alone and
+    // this load waits normally, so every stale map gets its own completion signal.)
+    const coverage = priceCoverage(symbols, (s) => this.quotes.get(s)?.last !== undefined)
+    if (shouldShowEarly(settings.get().prefs.instantSwitch, coverage) && !this.refreshing.has(id)) {
+      this.refreshing.add(id)
+      void this.fetchQuotes(withBenchmark, seq, true)
+        .finally(() => this.refreshing.delete(id))
+        .then(() => {
           if (seq !== this.loadSeq) return
-          this.recomputeCaps()
-          this.emit('snapshot', this.snapshot())
+          this.emit('refreshed', id)
+          this.startStreams(symbols)
         })
-      if (seq !== this.loadSeq) return this.snapshot()
-      for (const q of quotes) this.merge(q, false)
+      timer.lap('quotes')
+      perfLog('setUniverse', { universe: id, symbols: symbols.length, early: true, ...timer.laps })
+      return { ...this.snapshot(), stale: true }
+    }
+
+    await Promise.all([this.fetchQuotes(withBenchmark, seq, false), big ? undefined : shares])
+    timer.lap('quotes')
+    if (seq !== this.loadSeq) return this.snapshot()
+    // Subscriptions and the history sync start after the snapshot is on its way to the renderer.
+    setImmediate(() => seq === this.loadSeq && this.startStreams(symbols))
+    const snap = this.snapshot()
+    timer.lap('snapshot')
+    perfLog('setUniverse', { universe: id, symbols: symbols.length, early: false, ...timer.laps })
+    return snap
+  }
+
+  /** Batch quotes for a universe; `live` sends them on as ticks (the map is already drawn). */
+  private async fetchQuotes(symbols: string[], seq: number, live: boolean): Promise<void> {
+    try {
+      // A refresh of a map already on screen yields to whatever you're waiting on.
+      const quotes = await getQuotes(symbols, live ? 'refresh' : 'interactive')
+      if (seq !== this.loadSeq) return
+      for (const q of quotes) this.merge(q, live)
       this.setStatus({ message: undefined })
     } catch (e) {
       this.setStatus({ message: { key: 'quotesFailed', detail: (e as Error).message } })
     }
+  }
 
-    this.streamer.subscribe(withBenchmark)
+  private startStreams(symbols: string[]): void {
     // The benchmark first (it's the headline number), then the biggest companies: they are the
     // tiles you see, so they should get colors first.
-    const bySize = [...symbols].sort((a, b) => (this.quotes.get(b)?.marketCap ?? 0) - (this.quotes.get(a)?.marketCap ?? 0))
-    const order = this.benchmark && this.quotes.has(this.benchmark) ? [this.benchmark, ...bySize.filter((s) => s !== this.benchmark)] : bySize
+    const benchmark = this.benchmark && this.quotes.has(this.benchmark) ? this.benchmark : undefined
+    const order = subscriptionOrder(benchmark ? [...symbols, benchmark] : symbols, benchmark, (s) => this.quotes.get(s)?.marketCap)
+    this.streamer.subscribe(order)
     // The quotes just loaded usually carry yesterday's missing close, so most histories update
     // without a request; only the rest join the fetch queue.
-    this.history.fill(order, (s, candles) => this.onHistory(s, candles), this.quotes)
-    return this.snapshot()
+    const t0 = performance.now()
+    void this.history
+      .fill(order, (s, candles) => this.onHistory(s, candles), this.quotes)
+      .then((stats) => perfLog('historyFill', { universe: this.universe, ms: Math.round(performance.now() - t0), ...stats }))
+  }
+
+  /** Better share counts arrived: recompute caps and push them as ticks (no re-layout). */
+  private refreshCaps(symbols: string[]): void {
+    for (const s of symbols) if (this.quotes.has(s)) this.merge({ symbol: s })
   }
 
   private async loadDemo(id: UniverseId): Promise<Snapshot> {
@@ -158,18 +212,11 @@ export class DataService extends EventEmitter {
     return symbols.filter((s) => !(now - (this.sharesCache.fetchedAt[s] ?? 0) < SHARES_TTL_MS))
   }
 
-  private recomputeCaps(): void {
-    for (const q of this.quotes.values()) {
-      const shares = this.shares(q.symbol)
-      if (shares && q.last) q.marketCap = shares * q.last
-    }
-  }
-
-  private async pollBenchmark(): Promise<void> {
+  private async pollBenchmarkOnce(): Promise<void> {
     const b = this.benchmark
     if (!b || !this.quotes.has(b) || auth.state().status !== 'loggedIn' || demoEnabled()) return
     try {
-      for (const q of await getQuotes([b])) this.merge(q)
+      for (const q of await getQuotes([b], 'refresh')) this.merge(q)
     } catch {
       // Next round retries.
     }
@@ -211,10 +258,10 @@ export class DataService extends EventEmitter {
   }
 
   /** Symbols the streamer refused are refreshed with batch quotes instead. */
-  private async poll(): Promise<void> {
+  private async pollOnce(): Promise<void> {
     if (!this.polled.size || auth.state().status !== 'loggedIn') return
     try {
-      for (const q of await getQuotes([...this.polled])) this.merge(q)
+      for (const q of await getQuotes([...this.polled], 'refresh')) this.merge(q)
     } catch {
       // The next round retries; streamed symbols are unaffected.
     }
@@ -225,7 +272,7 @@ export class DataService extends EventEmitter {
     const stale = this.staleShares(symbols)
     if (!stale.length) return
     try {
-      const shares = await getSharesOutstanding(stale, background)
+      const shares = await getSharesOutstanding(stale, background ? 'refresh' : 'interactive')
       for (const s of stale) this.sharesCache.fetchedAt[s] = now
       Object.assign(this.sharesCache.shares, shares)
       writeJson('shares.json', this.sharesCache)

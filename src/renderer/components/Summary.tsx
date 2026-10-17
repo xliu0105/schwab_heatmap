@@ -17,6 +17,8 @@ interface Props {
   version: number
   benchmark?: string
   zoom: Zoom
+  /** Drawn from remembered prices; fresh quotes are on the way. */
+  stale?: boolean
 }
 
 type Weighting = 'cap' | 'equal' | 'fund' | 'position'
@@ -121,7 +123,8 @@ export function Summary(p: Props) {
 
   if (!parts.length && !group) return null
   return (
-    <div className="summary">
+    <div className={`summary${p.stale ? ' stale' : ''}`}>
+      {p.stale && <span className="sum-stale">{t('updatingQuotes')}</span>}
       {group}
       {parts}
       <span className="sum-period">{tr.period(p.period)}</span>

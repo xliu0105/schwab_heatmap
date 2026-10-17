@@ -19,6 +19,7 @@ const api: Api = {
   searchSymbols: (query) => ipcRenderer.invoke('symbols:search', query),
   lookupEtf: (ticker) => ipcRenderer.invoke('etf:lookup', ticker),
   etfNames: (tickers) => ipcRenderer.invoke('etf:names', tickers),
+  perf: (event, data) => ipcRenderer.send('perf:log', event, data),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
   cloudState: () => ipcRenderer.invoke('cloud:state'),
   cloudSignIn: () => ipcRenderer.invoke('cloud:signIn'),
@@ -32,6 +33,7 @@ const api: Api = {
   onRefs: on('data:refs'),
   onSnapshot: on('data:snapshot'),
   onHoldings: on('data:holdings'),
+  onRefreshed: on('data:refreshed'),
   onStatus: on('status'),
   onSettings: on('settings:changed'),
   onCloudState: on('cloud:state')

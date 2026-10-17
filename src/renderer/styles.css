@@ -219,3 +219,10 @@ button.google .g { font-weight: 800; color: #4285f4; }
 .sum-note { color: var(--muted); font-size: 11px; }
 .sum-period { color: var(--muted); font-size: 12px; }
 .sum-group { padding-right: 14px; border-right: 1px solid var(--line); }
+/* Remembered prices: grey the numbers so they don't read as current, and say they're updating. */
+.summary.stale .sum-pct, .summary.stale .sum-money, .summary.stale .sum-price { color: var(--muted); }
+.sum-stale { color: #f0b90b; font-size: 12px; }
+.opt-row { display: flex; gap: 8px; margin: 6px 0 4px; }
+.opt { flex: 1; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; cursor: pointer; color: var(--text); }
+.opt.on { border-color: var(--accent); background: rgba(41, 98, 255, 0.12); }
+.opt small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }

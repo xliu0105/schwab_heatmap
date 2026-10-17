@@ -1,7 +1,7 @@
 import type { Prefs, SyncedSettings } from './types'
 import { normalizeSymbol } from './symbols'
 
-export const DEFAULT_PREFS: Prefs = { lang: 'zh', universe: 'sp500', period: '1D', sizeBy: 'marketCap', etfSizeBy: 'weight', grouped: true }
+export const DEFAULT_PREFS: Prefs = { lang: 'zh', universe: 'sp500', period: '1D', sizeBy: 'marketCap', etfSizeBy: 'weight', grouped: true, instantSwitch: false }
 export const DEFAULT_ETFS = ['SMH', 'QQQM', 'XLP', 'VOO']
 
 export function cleanWatchlist(list: string[]): string[] {

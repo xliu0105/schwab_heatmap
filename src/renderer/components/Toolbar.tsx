@@ -28,8 +28,8 @@ interface Props {
   onManageEtfs(): void
 }
 
-// Background sync gets 90 of the limiter's 110 requests/min (20 are reserved for foreground).
-const HISTORY_PER_SEC = 90 / 60
+// History sync (bulk lane) gets at most 50 of the limiter's 110 requests/min.
+const HISTORY_PER_SEC = 50 / 60
 
 function etaText(tr: T, remaining: number): string {
   const min = remaining / HISTORY_PER_SEC / 60

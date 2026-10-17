@@ -3,10 +3,12 @@ import type { Candle, Quote } from '@shared/types'
 import { lastMarketClose } from '@shared/marketTime'
 import { FULL_REFRESH_MS, patchFromQuote, prioritize, type HistoryEntry } from '@shared/historyPatch'
 import { getDailyHistory, getIntraday } from '../schwab/market'
-import { readJson, writeJson } from '../storage'
+import { readJson, readJsonAsync, writeJson } from '../storage'
 
 const INTRADAY_TTL_MS = 60 * 1000
 const WORKERS = 4
+// Cache files are read this many at a time, yielding in between so the main process stays responsive.
+const READ_BATCH = 200
 
 type OnSymbol = (symbol: string, candles: Candle[]) => void
 
@@ -26,6 +28,7 @@ export class HistoryCache extends EventEmitter {
   private current = new Set<string>()
   private workers = 0
   private onSymbol?: OnSymbol
+  private fillSeq = 0
 
   get(symbol: string): Candle[] | undefined {
     return this.load(symbol)?.candles
@@ -40,6 +43,16 @@ export class HistoryCache extends EventEmitter {
     return e
   }
 
+  private async loadAll(symbols: string[]): Promise<void> {
+    const missing = symbols.filter((s) => !this.daily.has(s))
+    for (let i = 0; i < missing.length; i += READ_BATCH) {
+      const batch = missing.slice(i, i + READ_BATCH)
+      const entries = await Promise.all(batch.map((s) => readJsonAsync<HistoryEntry | undefined>(`history/${s}.json`, undefined)))
+      batch.forEach((s, j) => entries[j] && !this.daily.has(s) && this.daily.set(s, entries[j]!))
+      await new Promise((r) => setImmediate(r))
+    }
+  }
+
   private save(symbol: string, e: HistoryEntry): void {
     this.daily.set(symbol, e)
     writeJson(`history/${symbol}.json`, e)
@@ -49,29 +62,40 @@ export class HistoryCache extends EventEmitter {
    * Makes `symbols` (the universe on screen, in priority order) current: fresh or quote-patchable
    * histories are reported at once, the rest are queued ahead of any older backlog.
    */
-  fill(symbols: string[], onSymbol: OnSymbol, quotes?: Map<string, Quote>): void {
+  async fill(symbols: string[], onSymbol: OnSymbol, quotes?: Map<string, Quote>): Promise<{ cached: number; patched: number; queued: number }> {
+    const id = ++this.fillSeq
     this.onSymbol = onSymbol
     this.current = new Set(symbols)
+    await this.loadAll(symbols)
     const now = Date.now()
+    let cached = 0
+    let patched = 0
     const close = lastMarketClose(now)
     const urgent: string[] = []
     const weekly: string[] = []
     for (const s of symbols) {
       const e = this.load(s)
-      const patched = e && e.fetchedAt >= close ? e : patchFromQuote(e, quotes?.get(s), now)
-      if (patched) {
-        if (patched !== e) this.save(s, patched)
-        onSymbol(s, patched.candles)
+      const usable = e && e.fetchedAt >= close ? e : patchFromQuote(e, quotes?.get(s), now)
+      if (usable) {
+        if (usable !== e) {
+          this.save(s, usable)
+          patched++
+        } else cached++
+        onSymbol(s, usable.candles)
         // Still usable today, but due for its periodic full refetch: do it after everything urgent.
-        if (now - (patched.fullAt ?? patched.fetchedAt) > FULL_REFRESH_MS) weekly.push(s)
+        if (now - (usable.fullAt ?? usable.fetchedAt) > FULL_REFRESH_MS) weekly.push(s)
       } else urgent.push(s)
     }
-    this.queue = prioritize(this.queue, urgent, weekly, this.inFlight)
+    // A newer universe took over while the cache was loading: its symbols keep the front.
+    this.queue = id === this.fillSeq ? prioritize(this.queue, urgent, weekly, this.inFlight) : prioritize(this.queue, [], [...urgent, ...weekly], this.inFlight)
     this.emitProgress()
-    while (this.workers < WORKERS && this.queue.length) {
-      this.workers++
-      void this.work()
-    }
+    // Only the newest fill starts fetching, so a superseded one can't jump ahead of it.
+    if (id === this.fillSeq)
+      while (this.workers < WORKERS && this.queue.length) {
+        this.workers++
+        void this.work()
+      }
+    return { cached, patched, queued: urgent.length }
   }
 
   /** Progress of the universe on screen; background refreshes and older backlog don't count. */

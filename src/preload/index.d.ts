@@ -17,6 +17,8 @@ export interface Api {
   searchSymbols(query: string): Promise<SymbolEntry[]>
   lookupEtf(ticker: string): Promise<EtfLookup>
   etfNames(tickers: string[]): Promise<Record<string, string>>
+  /** Records renderer-side timings in userData/perf.log. */
+  perf(event: string, data: Record<string, number | string | boolean>): void
   updateSettings(patch: { watchlist?: string[]; etfs?: string[]; prefs?: Partial<Prefs> }): Promise<SyncedSettings>
   cloudState(): Promise<CloudState>
   cloudSignIn(): Promise<void>
@@ -29,6 +31,8 @@ export interface Api {
   onTicks(fn: (q: Quote[]) => void): () => void
   onRefs(fn: (r: RefTable) => void): () => void
   onSnapshot(fn: (s: Snapshot) => void): () => void
+  /** Fresh quotes arrived for a universe drawn from remembered prices. */
+  onRefreshed(fn: (universe: UniverseId) => void): () => void
   onHoldings(fn: (h: Pick<Constituent, 'symbol' | 'shares' | 'value' | 'dayPL'>[]) => void): () => void
   onStatus(fn: (s: StatusInfo) => void): () => void
   onSettings(fn: (s: SyncedSettings) => void): () => void

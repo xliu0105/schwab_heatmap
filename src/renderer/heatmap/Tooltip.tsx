@@ -7,25 +7,37 @@ import { useT } from '../i18n'
 const WIDTH = 320
 const MAX_PEERS = 12
 const cache = new Map<string, { at: number; candles: Candle[] }>()
+// Stop showing "loading" after this long; nothing is cached, so the next hover asks again.
+const GIVE_UP_MS = 12_000
+const HOVER_DELAY_MS = 500
 
-function useCandles(symbol: string, period: Period): Candle[] | undefined {
+/** Chart data for the hovered stock: candles, `undefined` while loading, or 'unavailable'. */
+function useCandles(symbol: string, period: Period): Candle[] | 'unavailable' | undefined {
   const key = `${symbol}:${period}`
-  const [candles, setCandles] = useState(cache.get(key)?.candles)
+  const [candles, setCandles] = useState<Candle[] | 'unavailable' | undefined>(cache.get(key)?.candles)
   useEffect(() => {
     const hit = cache.get(key)
     setCandles(hit?.candles)
     if (hit && Date.now() - hit.at < 60_000) return
-    // Debounced so sweeping the mouse across the map doesn't burn the API rate limit.
+    // Answers for a stock you've already moved off must not land in this tooltip.
+    let current = true
+    // Only after the mouse rests on a stock for half a second, so sweeping across the map
+    // doesn't spend API requests on every tile it passes.
     const t = setTimeout(() => {
       window.api
         .candles(symbol, period)
         .then((c) => {
           cache.set(key, { at: Date.now(), candles: c })
-          setCandles(c)
+          if (current) setCandles(c)
         })
-        .catch(() => setCandles([]))
-    }, 250)
-    return () => clearTimeout(t)
+        .catch(() => current && setCandles('unavailable'))
+    }, HOVER_DELAY_MS)
+    const giveUp = setTimeout(() => current && setCandles((c) => c ?? 'unavailable'), GIVE_UP_MS)
+    return () => {
+      current = false
+      clearTimeout(t)
+      clearTimeout(giveUp)
+    }
   }, [key, symbol, period])
   return candles
 }
@@ -97,7 +109,9 @@ export function Tooltip({ stock, peers, quotes, refs, period, x, y, bounds, weig
           <div style={{ color: (pct ?? 0) >= 0 ? '#22c25e' : '#f23645' }}>{fmtPct(pct)}</div>
         </div>
       </div>
-      {candles ? (
+      {candles === 'unavailable' ? (
+        <div className="spark-empty">{tr.t('chartUnavailable')}</div>
+      ) : candles ? (
         <Sparkline candles={candles} up={(pct ?? 0) >= 0} empty={tr.t('noChart')} />
       ) : (
         <div className="spark-empty">{tr.t('loading')}</div>

@@ -95,11 +95,16 @@ export const Heatmap = forwardRef<HeatmapHandle, Props>(function Heatmap(p, ref)
   }, [])
 
   // Layout is frozen between explicit changes so tiles don't jitter as prices tick.
+  const pendingDrawTiming = useRef<number>()
   const layout = useMemo(
-    () =>
-      size.w && size.h
-        ? buildLayout(p.constituents, weigher(p.constituents, p.quotes, p.sizeBy), { width: size.w, height: size.h, grouped: p.grouped, zoom: p.zoom })
-        : { tiles: [], groups: [] },
+    () => {
+      if (!size.w || !size.h) return { tiles: [], groups: [] }
+      const t0 = performance.now()
+      const l = buildLayout(p.constituents, weigher(p.constituents, p.quotes, p.sizeBy), { width: size.w, height: size.h, grouped: p.grouped, zoom: p.zoom })
+      window.api.perf('layout', { tiles: l.tiles.length, ms: Math.round(performance.now() - t0) })
+      pendingDrawTiming.current = l.tiles.length
+      return l
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [p.constituents, p.sizeBy, p.grouped, p.zoom, size.w, size.h, p.layoutEpoch]
   )
@@ -236,6 +241,7 @@ export const Heatmap = forwardRef<HeatmapHandle, Props>(function Heatmap(p, ref)
         canvas.height = size.h * dpr
       }
       const ctx = canvas.getContext('2d')!
+      const t0 = performance.now()
       draw(ctx, layout, size.w, size.h, {
         quotes: p.quotes,
         refs: p.refs,
@@ -249,6 +255,11 @@ export const Heatmap = forwardRef<HeatmapHandle, Props>(function Heatmap(p, ref)
         dpr,
         watch: p.watch
       })
+      // The first frame after a new layout also measures every label, so it's the one worth timing.
+      if (pendingDrawTiming.current !== undefined) {
+        window.api.perf('firstDraw', { tiles: pendingDrawTiming.current, ms: Math.round(performance.now() - t0) })
+        pendingDrawTiming.current = undefined
+      }
     })
   }, [layout, p.version, p.refs, p.period, p.search, p.legendBucket, hoverSymbol, hoverGroup, size, p.quotes, lang, view, p.watch])
 

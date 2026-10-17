@@ -1,59 +1,66 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { RateLimiter } from '../src/main/schwab/rateLimit'
+import { RateLimiter, type Lane } from '../src/main/schwab/rateLimit'
 
-const make = (limit: number, windowMs: number, concurrency = 10, reserve = 0) =>
-  new RateLimiter(limit, windowMs, concurrency, () => Date.now(), reserve)
+const make = (limit: number, windowMs: number, concurrency = 10, reserves = { refresh: 0, bulk: 0 }) =>
+  new RateLimiter(limit, windowMs, concurrency, () => Date.now(), reserves)
+
+const jobs = (lim: RateLimiter, n: number, lane: Lane, log: string[], tag = lane) =>
+  Array.from({ length: n }, (_, i) => lim.run(async () => void log.push(`${tag}${i}`), { lane }))
 
 describe('RateLimiter', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('lets foreground requests burst up to the window limit', async () => {
+  it('lets interactive requests burst up to the window limit', async () => {
     const lim = make(3, 1000)
-    const started: number[] = []
-    const jobs = Array.from({ length: 5 }, (_, i) => lim.run(async () => void started.push(i)))
+    const log: string[] = []
+    const all = jobs(lim, 5, 'interactive', log)
     await vi.advanceTimersByTimeAsync(5)
-    expect(started).toEqual([0, 1, 2])
+    expect(log).toHaveLength(3)
     await vi.advanceTimersByTimeAsync(1000)
-    await Promise.all(jobs)
-    expect(started).toEqual([0, 1, 2, 3, 4])
+    await Promise.all(all)
+    expect(log).toHaveLength(5)
   })
 
-  it('paces background requests evenly instead of bursting', async () => {
+  it('paces bulk requests evenly instead of bursting', async () => {
     const lim = make(10, 1000)
     const t0 = Date.now()
     const at: number[] = []
-    const jobs = Array.from({ length: 5 }, () => lim.run(async () => void at.push(Date.now() - t0), { background: true }))
+    const all = Array.from({ length: 5 }, () => lim.run(async () => void at.push(Date.now() - t0), { lane: 'bulk' }))
     await vi.advanceTimersByTimeAsync(1000)
-    await Promise.all(jobs)
-    expect(at).toHaveLength(5)
+    await Promise.all(all)
     for (let i = 1; i < at.length; i++) expect(at[i] - at[i - 1]).toBeGreaterThanOrEqual(100)
   })
 
-  it('starts foreground work ahead of queued background work', async () => {
-    const lim = make(10, 1000)
-    const order: string[] = []
-    const bg = Array.from({ length: 5 }, (_, i) => lim.run(async () => void order.push(`bg${i}`), { background: true }))
-    await vi.advanceTimersByTimeAsync(10)
-    const fg = lim.run(async () => void order.push('fg'))
-    await vi.advanceTimersByTimeAsync(10)
-    expect(order).toEqual(['bg0', 'fg'])
+  it('serves lanes in priority order', async () => {
+    const lim = make(100, 1000, 1)
+    const log: string[] = []
+    // Occupy the single slot so everything else queues, then release it.
+    let release!: () => void
+    const blocker = lim.run(() => new Promise<void>((r) => (release = r)))
+    await vi.advanceTimersByTimeAsync(1)
+    const all = [...jobs(lim, 2, 'bulk', log), ...jobs(lim, 2, 'refresh', log), ...jobs(lim, 2, 'interactive', log)]
+    release()
     await vi.advanceTimersByTimeAsync(2000)
-    await Promise.all([...bg, fg])
+    await Promise.all([blocker, ...all])
+    expect(log).toEqual(['interactive0', 'interactive1', 'refresh0', 'refresh1', 'bulk0', 'bulk1'])
   })
 
-  it('keeps reserved slots free for foreground requests', async () => {
-    const lim = make(10, 1000, 10, 4)
-    const order: string[] = []
-    const bg = Array.from({ length: 10 }, (_, i) => lim.run(async () => void order.push(`bg${i}`), { background: true }))
-    await vi.advanceTimersByTimeAsync(950)
-    // 10/window with 4 reserved: background stops at 6 even though its pace would allow more.
-    expect(order).toHaveLength(6)
-    const fg = Array.from({ length: 4 }, (_, i) => lim.run(async () => void order.push(`fg${i}`)))
-    await vi.advanceTimersByTimeAsync(1)
-    expect(order.slice(6)).toEqual(['fg0', 'fg1', 'fg2', 'fg3'])
-    await vi.advanceTimersByTimeAsync(3000)
-    await Promise.all([...bg, ...fg])
+  it('keeps reserved slots: bulk leaves 60, refresh leaves 30', async () => {
+    const lim = make(110, 60_000, 200, { refresh: 30, bulk: 60 })
+    const log: string[] = []
+    const bulk = jobs(lim, 200, 'bulk', log)
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(log.filter((l) => l.startsWith('bulk')).length).toBeLessThanOrEqual(50)
+    const refresh = jobs(lim, 100, 'refresh', log)
+    await vi.advanceTimersByTimeAsync(5)
+    expect(log.filter((l) => l.startsWith('refresh')).length).toBeGreaterThanOrEqual(30)
+    expect(lim.stats().used).toBeLessThanOrEqual(80)
+    const interactive = jobs(lim, 30, 'interactive', log)
+    await vi.advanceTimersByTimeAsync(5)
+    expect(log.filter((l) => l.startsWith('interactive'))).toHaveLength(30)
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    await Promise.all([...bulk, ...refresh, ...interactive])
   })
 
   it('caps concurrency', async () => {
@@ -70,5 +77,15 @@ describe('RateLimiter', () => {
     await vi.advanceTimersByTimeAsync(500)
     await all
     expect(peak).toBe(2)
+  })
+
+  it('reports queue depth and window usage', async () => {
+    const lim = make(2, 1000, 10)
+    const log: string[] = []
+    const all = [...jobs(lim, 3, 'interactive', log), ...jobs(lim, 1, 'bulk', log)]
+    await vi.advanceTimersByTimeAsync(1)
+    expect(lim.stats()).toMatchObject({ used: 2, queued: { interactive: 1, refresh: 0, bulk: 1 } })
+    await vi.advanceTimersByTimeAsync(5000)
+    await Promise.all(all)
   })
 })

@@ -11,6 +11,7 @@ import { etfNames, EtfNotFound, getEtf } from './data/etf'
 import { normalizeSymbol } from '@shared/symbols'
 import { sync } from './cloud/sync'
 import { settings } from './settings'
+import { perfLog } from './perf'
 
 let win: BrowserWindow | undefined
 const data = new DataService()
@@ -44,6 +45,7 @@ data.on('ticks', (q) => send('data:ticks', q))
 data.on('refs', (r) => send('data:refs', r))
 data.on('snapshot', (s) => send('data:snapshot', s))
 data.on('holdings', (h) => send('data:holdings', h))
+data.on('refreshed', (id) => send('data:refreshed', id))
 sync.on('state', (s) => send('cloud:state', s))
 settings.on('change', async (s: SyncedSettings, { watchlistChanged }: { watchlistChanged: boolean }) => {
   send('settings:changed', s)
@@ -85,6 +87,7 @@ ipcMain.handle('etf:lookup', async (_e, raw: string) => {
   }
 })
 ipcMain.handle('etf:names', (_e, tickers: string[]) => etfNames(tickers))
+ipcMain.on('perf:log', (_e, event: string, data: Record<string, number | string | boolean>) => perfLog(event, data))
 ipcMain.handle('settings:update', (_e, patch: { watchlist?: string[]; etfs?: string[]; prefs?: Partial<Prefs> }) => settings.update(patch))
 ipcMain.handle('cloud:state', () => sync.getState())
 ipcMain.handle('cloud:signIn', () => sync.signIn())

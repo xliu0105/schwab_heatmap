@@ -82,10 +82,16 @@ export function App() {
     [watchlist]
   )
   const { universe, period, grouped, lang } = prefs
-  const inEtf = isEtfUniverse(universe)
+  // The universe chosen in the menu vs. the one actually on screen: while a switch waits for
+  // fresh quotes the old map stays up, and everything describing the map must still match it.
+  const [shown, setShown] = useState<UniverseId>()
+  const shownRef = useRef<UniverseId>()
+  const [stale, setStale] = useState(false)
+  const mapUniverse = shown ?? universe
+  const inEtf = isEtfUniverse(mapUniverse)
   // ETF and holdings maps carry per-stock weights (fund weight, position value) and share one
   // sizing pref that defaults to those weights, kept apart from the index maps' sizing.
-  const weighted = inEtf || universe === 'holdings'
+  const weighted = inEtf || mapUniverse === 'holdings'
   // ETF maps keep their own sizing (fund weight by default), separate from the index maps.
   const sizeBy: SizeBy = weighted ? prefs.etfSizeBy : prefs.sizeBy === 'weight' ? 'marketCap' : prefs.sizeBy
   const setUniverse = (u: UniverseId) => setPref({ universe: u })
@@ -113,6 +119,11 @@ export function App() {
 
   const apply = useCallback((s: Snapshot) => {
     if (s.universe !== universeRef.current) return
+    window.api.perf('applySnapshot', { universe: s.universe, symbols: s.constituents.length })
+    if (shownRef.current !== s.universe) setZoom({})
+    shownRef.current = s.universe
+    setShown(s.universe)
+    setStale(Boolean(s.stale))
     quotes.current = new Map(Object.entries(s.quotes))
     setConstituents(s.constituents)
     setRefs(s.refs)
@@ -136,6 +147,7 @@ export function App() {
         setVersion((v) => v + 1)
       }),
       window.api.onRefs((r) => setRefs((prev) => ({ ...prev, ...r }))),
+      window.api.onRefreshed((id) => id === shownRef.current && setStale(false)),
       // Size-only position changes: patch the current constituents in place and redraw, without
       // handing the heatmap a new array (that would re-lay out the tiles).
       window.api.onHoldings((updates) => {
@@ -157,11 +169,15 @@ export function App() {
   useEffect(() => {
     // Wait for the stored prefs, or a launch would load the default universe and then switch.
     if (!prefsReady) return
-    setZoom({})
     setLoading(true)
+    const t0 = performance.now()
     void window.api
       .setUniverse(universe)
-      .then(apply)
+      .then((s) => {
+        // Round trip as the user feels it: click to snapshot in hand (includes IPC transfer).
+        window.api.perf('switch', { universe, ms: Math.round(performance.now() - t0) })
+        apply(s)
+      })
       .finally(() => setLoading(false))
   }, [universe, apply, prefsReady])
 
@@ -177,11 +193,11 @@ export function App() {
     if (!prefsReady) return
     const prev = prevEtfs.current
     prevEtfs.current = etfs
-    if (!inEtf) return
+    if (!isEtfUniverse(universe)) return
     const tk = etfTicker(universe)
     const removed = prev ? prev.includes(tk) && !etfs.includes(tk) : !etfs.includes(tk)
     if (removed) setPref({ universe: 'sp500' })
-  }, [prefsReady, inEtf, etfs, universe, setPref])
+  }, [prefsReady, etfs, universe, setPref])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -208,8 +224,8 @@ export function App() {
     if (url) void window.api.savePng(url)
   }
 
-  const etfName = inEtf ? etfNames[etfTicker(universe)] : undefined
-  const universeLabel = etfName ? `${tr.universe(universe)} · ${etfName}` : tr.universe(universe)
+  const etfName = isEtfUniverse(mapUniverse) ? etfNames[etfTicker(mapUniverse)] : undefined
+  const universeLabel = etfName ? `${tr.universe(mapUniverse)} · ${etfName}` : tr.universe(mapUniverse)
   const names = useMemo(() => Object.fromEntries(constituents.map((c) => [c.symbol, c.name])), [constituents])
   const watchAdd = (inline: boolean) => (
     <WatchlistAdd watchlist={watchlist} names={names} onAdd={addToWatchlist} onRemove={removeFromWatchlist} inline={inline} />
@@ -245,7 +261,7 @@ export function App() {
         etfNames={etfNames}
         onManageEtfs={() => setShowEtfs(true)}
         cloud={cloud}
-        extra={universe === 'watchlist' && watchlist.length > 0 ? watchAdd(false) : undefined}
+        extra={mapUniverse === 'watchlist' && watchlist.length > 0 ? watchAdd(false) : undefined}
       />
       <div className="crumbs">
         <button className={!zoom.sector ? 'current' : ''} onClick={() => setZoom({})}>
@@ -266,7 +282,8 @@ export function App() {
           </>
         )}
         <Summary
-          universe={universe}
+          universe={mapUniverse}
+          stale={stale}
           constituents={constituents}
           quotes={quotes.current}
           refs={refs}
@@ -292,7 +309,7 @@ export function App() {
           legendBucket={legendBucket}
           onZoom={setZoom}
           watch={watchSet}
-          weightKind={universe === 'holdings' ? 'holdings' : 'etf'}
+          weightKind={mapUniverse === 'holdings' ? 'holdings' : 'etf'}
           onWatchAdd={(sym) => addToWatchlist([sym])}
           onWatchRemove={removeFromWatchlist}
         />
@@ -306,7 +323,7 @@ export function App() {
             </div>
           </div>
         )}
-        {universe === 'watchlist' && watchlist.length === 0 && !showSettings ? (
+        {mapUniverse === 'watchlist' && watchlist.length === 0 && !showSettings ? (
           <div className="overlay">
             <div className="wl-empty-screen">
               <p>{tr.t('emptyWatchlist')}</p>
@@ -327,7 +344,15 @@ export function App() {
         <span className="footer-note">{tr.t('footer', { n: constituents.length })}</span>
         <Legend period={period} onHover={setLegendBucket} />
       </div>
-      {showSettings && <Settings status={status} cloud={cloud} onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <Settings
+          status={status}
+          cloud={cloud}
+          instantSwitch={prefs.instantSwitch}
+          onInstantSwitch={(v) => setPref({ instantSwitch: v })}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
       {showEtfs && (
         <EtfManager
           etfs={etfs}

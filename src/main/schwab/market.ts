@@ -1,6 +1,7 @@
 import type { Candle, Quote } from '@shared/types'
 import { fromSchwab, toSchwab } from '@shared/symbols'
 import { schwabGet } from './rest'
+import type { Lane } from './rateLimit'
 import { mergePositions, type Position, type RawAccount } from '@shared/positions'
 
 const MD = '/marketdata/v1'
@@ -41,14 +42,14 @@ export function chunk<T>(list: T[], size: number): T[][] {
   return out
 }
 
-export async function getQuotes(symbols: string[]): Promise<Quote[]> {
+export async function getQuotes(symbols: string[], lane: Lane = 'interactive'): Promise<Quote[]> {
   const batches = await Promise.all(
     chunk(symbols, 200).map((batch) =>
-      schwabGet<Record<string, RawQuote>>(`${MD}/quotes`, {
-        symbols: batch.map(toSchwab).join(','),
-        fields: 'quote',
-        indicative: false
-      })
+      schwabGet<Record<string, RawQuote>>(
+        `${MD}/quotes`,
+        { symbols: batch.map(toSchwab).join(','), fields: 'quote', indicative: false },
+        { lane }
+      )
     )
   )
   return batches.flatMap((b) =>
@@ -63,14 +64,14 @@ interface RawInstruments {
 }
 
 /** Shares outstanding per symbol; market cap is then derived from the live price. */
-export async function getSharesOutstanding(symbols: string[], background = false): Promise<Record<string, number>> {
+export async function getSharesOutstanding(symbols: string[], lane: Lane = 'interactive'): Promise<Record<string, number>> {
   const out: Record<string, number> = {}
   const batches = await Promise.all(
     chunk(symbols, 100).map((batch) =>
       schwabGet<RawInstruments>(
         `${MD}/instruments`,
         { symbol: batch.map(toSchwab).join(','), projection: 'fundamental' },
-        { background }
+        { lane }
       )
     )
   )
@@ -93,7 +94,7 @@ export async function getDailyHistory(symbol: string): Promise<Candle[]> {
     period: 1,
     frequencyType: 'daily',
     frequency: 1
-  }, { background: true })
+  }, { lane: 'bulk' })
   return (r.candles ?? []).map((c) => ({ t: c.datetime, c: c.close }))
 }
 

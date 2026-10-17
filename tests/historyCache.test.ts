@@ -4,6 +4,7 @@ const disk = new Map<string, unknown>()
 const fetched: string[] = []
 vi.mock('../src/main/storage', () => ({
   readJson: (name: string, fallback: unknown) => (disk.has(name) ? structuredClone(disk.get(name)) : fallback),
+  readJsonAsync: async (name: string, fallback: unknown) => (disk.has(name) ? structuredClone(disk.get(name)) : fallback),
   writeJson: (name: string, v: unknown) => void disk.set(name, structuredClone(v))
 }))
 vi.mock('../src/main/schwab/market', () => ({
@@ -35,7 +36,8 @@ describe('HistoryCache.fill', () => {
     disk.set('history/SPLT.json', dayOld(100)) // quote says prior close was 50 → adjusted prices
     const h = new HistoryCache()
     const seen: string[] = []
-    h.fill(['AAPL', 'SPLT', 'NEW'], (s) => seen.push(s), new Map([quote('AAPL', 100, 103), quote('SPLT', 50, 51)]))
+    const stats = await h.fill(['AAPL', 'SPLT', 'NEW'], (s) => seen.push(s), new Map([quote('AAPL', 100, 103), quote('SPLT', 50, 51)]))
+    expect(stats).toEqual({ cached: 0, patched: 1, queued: 2 })
     await vi.waitFor(() => expect(fetched.sort()).toEqual(['NEW', 'SPLT']))
     expect((disk.get('history/AAPL.json') as { candles: { c: number }[] }).candles.at(-1)!.c).toBe(103)
     expect(seen.sort()).toEqual(['AAPL', 'NEW', 'SPLT'])
@@ -45,7 +47,16 @@ describe('HistoryCache.fill', () => {
     const h = new HistoryCache()
     const progress: { done: number; total: number }[] = []
     h.on('progress', (p) => progress.push(p))
-    h.fill(['A', 'B'], () => {})
+    void h.fill(['A', 'B'], () => {})
     await vi.waitFor(() => expect(progress.at(-1)).toEqual({ done: 2, total: 2 }))
+  })
+
+  it('keeps the newest universe first when an older fill finishes loading later', async () => {
+    const h = new HistoryCache()
+    const older = h.fill(['OLD1', 'OLD2'], () => {})
+    const newer = h.fill(['NEW1'], () => {})
+    await Promise.all([older, newer])
+    await vi.waitFor(() => expect(fetched).toHaveLength(3))
+    expect(fetched[0]).toBe('NEW1')
   })
 })

@@ -99,6 +99,8 @@ export interface Snapshot {
   refs: RefTable
   /** Index or ETF quoted as the page's own move; absent when Schwab has no quote for it. */
   benchmark?: string
+  /** Drawn from prices remembered from earlier; fresh quotes follow ('data:refreshed'). */
+  stale?: boolean
 }
 
 export type AuthState =
@@ -121,6 +123,9 @@ export interface Prefs {
   /** Sizing used inside ETF universes, kept apart so "by weight" doesn't leak into index maps. */
   etfSizeBy: SizeBy
   grouped: boolean
+  /** Switch universes at once using the last prices seen (marked as updating) instead of
+   *  waiting for fresh quotes. */
+  instantSwitch: boolean
 }
 
 /** Everything cloud sync carries; `updatedAt` decides which copy wins. */
